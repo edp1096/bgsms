@@ -299,10 +299,9 @@ packages:
   readsms:
     dependency: "direct main"
     description:
-      name: readsms
-      sha256: da4e743e7a667a649195df667141e16f197461927a8cd6efed956ae312c86de0
-      url: "https://pub.dev"
-    source: hosted
+      path: "plugins/readsms"
+      relative: true
+    source: path
     version: "0.1.0+3"
   shared_preferences:
     dependency: "direct main"
