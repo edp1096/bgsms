@@ -25,9 +25,17 @@ Future<void> initializeService() async {
 void onStart(ServiceInstance service) async {
   debugPrint('Background service is running');
 
+  var lastTime = "";
+
   final serviceSMS = Readsms();
   serviceSMS.read();
   serviceSMS.smsStream.listen((e) {
+    if (lastTime == e.timeReceived.toString()) {
+      return;
+    }
+
+    lastTime = e.timeReceived.toString();
+
     debugPrint(e.body);
     debugPrint(e.sender);
     debugPrint(e.timeReceived.toString());

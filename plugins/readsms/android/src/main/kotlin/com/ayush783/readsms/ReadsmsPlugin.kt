@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Telephony
-import android.util.Log
 import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -27,16 +26,18 @@ class ReadsmsPlugin :
   private lateinit var activity: Activity
   private lateinit var mmsObserver: MmsObserver
 
+  private var lastTimeStamp: Long = 0L
+
   override fun onAttachedToEngine(
           @NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding
   ) {
     context = flutterPluginBinding.applicationContext
     context.registerReceiver(this, IntentFilter("android.provider.Telephony.SMS_RECEIVED"))
+
     channel = EventChannel(flutterPluginBinding.binaryMessenger, "readsms")
     channel!!.setStreamHandler(this)
 
-    var data = listOf("메시지바디", "01011112222", "2024-08-07 05:40:29.000")
-    eventSink?.success(data)
+    registerContentObservers()
   }
 
   private fun registerContentObservers() {
@@ -52,59 +53,85 @@ class ReadsmsPlugin :
   private inner class MmsObserver(handler: Handler) : ContentObserver(handler) {
     override fun onChange(selfChange: Boolean) {
       super.onChange(selfChange)
-      Log.d("MmsObserver", "MMS content changed")
 
-      // MMS 데이터 URI
       val uri = Uri.parse("content://mms/inbox")
-      val cursor = context.contentResolver.query(uri, null, null, null, null)
+      val cursor = context.contentResolver.query(uri, null, null, null, "date DESC")
 
       cursor?.use {
-        if (it.moveToLast()) {
-          do {
-            val messageId = it.getString(it.getColumnIndex("_id"))
-            val address = getMmsAddress(messageId)
-            val subject = getMmsSubject(messageId)
-            val body = getMmsBody(messageId)
+        if (it.moveToFirst()) {
+          val messageId = it.getString(it.getColumnIndex("_id"))
 
-            val data = listOf(body, address, subject)
-            eventSink?.success(data)
-          } while (it.moveToPrevious())
+          val address = getMmsAddress(messageId)
+          val body = getMmsBody(messageId)
+          val timestamp = getMmsTimestamp(messageId)
+
+          if (address == "Unknown") {
+            return
+          }
+
+          if (body == "No Body") {
+            return
+          }
+
+          if (lastTimeStamp == timestamp) {
+            return
+          }
+
+          lastTimeStamp = timestamp
+
+          val data = listOf(body, address, timestamp.toString())
+          eventSink?.success(data)
         }
       }
     }
   }
 
   private fun getMmsAddress(messageId: String): String {
-    val uri = Uri.parse("content://mms/$messageId")
+    val uri = Uri.parse("content://mms/$messageId/addr")
     val cursor = context.contentResolver.query(uri, arrayOf("address"), null, null, null)
+
     cursor?.use {
       if (it.moveToFirst()) {
         return it.getString(it.getColumnIndex("address"))
       }
     }
+
     return "Unknown"
   }
 
-  private fun getMmsSubject(messageId: String): String {
-    val uri = Uri.parse("content://mms/$messageId")
-    val cursor = context.contentResolver.query(uri, arrayOf("subject"), null, null, null)
+  private fun getMmsBody(messageId: String): String {
+    val uri = Uri.parse("content://mms/part")
+    val cursor =
+            context.contentResolver.query(
+                    uri,
+                    arrayOf("ct", "text"),
+                    "mid=?",
+                    arrayOf(messageId),
+                    null
+            )
+
     cursor?.use {
-      if (it.moveToFirst()) {
-        return it.getString(it.getColumnIndex("subject"))
+      while (it.moveToNext()) {
+        if (it.getString(it.getColumnIndex("ct")) == "text/plain") {
+          return it.getString(it.getColumnIndex("text"))
+        }
       }
     }
-    return "No Subject"
+
+    return "No Body"
   }
 
-  private fun getMmsBody(messageId: String): String {
+  private fun getMmsTimestamp(messageId: String): Long {
     val uri = Uri.parse("content://mms/$messageId")
-    val cursor = context.contentResolver.query(uri, arrayOf("body"), null, null, null)
+    val cursor = context.contentResolver.query(uri, arrayOf("date"), null, null, null)
+
     cursor?.use {
       if (it.moveToFirst()) {
-        return it.getString(it.getColumnIndex("body"))
+        return it.getLong(it.getColumnIndex("date")) * 1000
       }
     }
-    return "No Body"
+
+    return 0L
   }
 
   override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -115,17 +142,23 @@ class ReadsmsPlugin :
     eventSink = null
   }
 
-  override fun onReceive(p0: Context?, p1: Intent?) {
+  override fun onReceive(p0: Context?, intent: Intent?) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      for (sms in Telephony.Sms.Intents.getMessagesFromIntent(p1)) {
-        var data =
-                listOf(
-                        sms.displayMessageBody,
-                        sms.originatingAddress.toString(),
-                        sms.timestampMillis.toString(),
-                )
-        eventSink?.success(data)
+      when (intent?.action) {
+        Telephony.Sms.Intents.SMS_RECEIVED_ACTION -> handleSms(intent)
       }
+    }
+  }
+
+  private fun handleSms(intent: Intent) {
+    for (sms in Telephony.Sms.Intents.getMessagesFromIntent(intent)) {
+      var data =
+              listOf(
+                      sms.displayMessageBody,
+                      sms.originatingAddress.toString(),
+                      sms.timestampMillis.toString(),
+              )
+      eventSink?.success(data)
     }
   }
 
